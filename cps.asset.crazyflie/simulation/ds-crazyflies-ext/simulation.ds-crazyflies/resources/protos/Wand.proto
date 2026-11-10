@@ -1,0 +1,81 @@
+#VRML_SIM R2023b utf8
+# Describe the functionality of your PROTO here.
+
+
+PROTO Wand [
+  field SFVec3f translation 0 0 0
+  field SFRotation rotation 0 0 1 0
+  field SFString name "solid"
+]
+{
+  Solid {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+     children [
+      Pose {
+        rotation 0 1 0 1.56
+        #translation 0 0 0.017
+        children [
+          Shape {
+            appearance DEF STICK PBRAppearance {
+              baseColor 0.1 0.1 0.1
+              metalness 0
+            }
+            geometry Cylinder {
+                height 0.4
+                radius 0.009
+            }
+          }    
+          Pose { #double bar
+            rotation 1 0 0 1.56
+            translation 0.0 0.0 0.15
+            children [
+              DEF STICK_GEOM Group {
+                children [
+                  Shape {
+                  appearance USE STICK
+                  geometry Cylinder {
+                    height 0.10
+                    radius 0.0025
+                  }
+                 }
+                 Pose {
+                   translation 0 0 0.05
+                   children [
+                     DEF BALL Shape {
+                       appearance PBRAppearance {
+                         baseColor 0.9 0.9 0.9
+                         metalness 0
+                       }
+                       geometry Sphere {
+                         radius 0.008
+                       }
+                      }
+                   ]
+                 }
+                 Pose {
+                   translation 0 0 -0.05
+                   children [ USE BALL ]
+                 } 
+               ]  
+               }
+            ]
+          }
+          
+          Pose { #z-Stick
+            rotation 0 1 0 1.56
+            translation -0.05 0 0.175
+            children [USE STICK_GEOM]
+          }
+          Pose { ## Vertical Ball on Top
+            rotation 0 0 0 0
+            translation 0 0 0.2
+            children [USE STICK_GEOM]
+          }
+        ]
+      }
+      
+    ] 
+  }
+}

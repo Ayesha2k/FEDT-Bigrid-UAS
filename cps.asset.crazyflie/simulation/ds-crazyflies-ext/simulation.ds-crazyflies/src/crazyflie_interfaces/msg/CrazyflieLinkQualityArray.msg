@@ -1,0 +1,1 @@
+CrazyflieLinkQuality[] link_qualities

@@ -56,10 +56,9 @@ public class BQuadtreeHandler extends ServiceHandlerSupport {
             quadtree.setProximityDistance((float) marginPoint);
 //            quadtree.addListener(new QuadtreeListener() {
 //                @Override
-//                public void onPointRejected(Point2D p0) {
+
 //                    pointsOmitted.add((Point2D.Double) p0);
-//                }
-//            });
+
             if (pointData == null) {
                 return ServerResponse.badRequest()
                         .contentType(MediaType.APPLICATION_JSON)

@@ -1,0 +1,34 @@
+name: fedt-uas
+services:
+  webots:
+    image: ${FEDT_IMAGE:-fedt-crazyflies:humble-webots-r2025a}
+    build:
+      context: ../../../..
+      dockerfile: simulation/ds-crazyflies-ext/simulation.ds-crazyflies/docker/Dockerfile
+    container_name: fedt-crazyflies-dev
+    labels:
+      io.fedt.stack: fedt-bigrid-uas.webots
+      io.fedt.source: ${FEDT_SOURCE_ID:-manual-compose}
+    init: true
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY:-}
+      QT_X11_NO_MITSHM: '1'
+      FEDT_HEADLESS: ${FEDT_HEADLESS:-0}
+      PYTHONDONTWRITEBYTECODE: '1'
+    volumes:
+      - ../../../../controller:/workspace/controller:ro
+      - ../tools:/ds/ds-crazyflies/tools:ro
+      - ../config.json:/ds/ds-crazyflies/config.json:ro
+      - ../../crazyflie.wbt:/ds/crazywebotsworld/worlds/crazyflie.wbt:rw
+      - ../.runtime:/ds/ds-crazyflies/.runtime:rw
+    working_dir: /ds/ds-crazyflies
+    command: [python3, tools/runtime.py]
+    healthcheck:
+      test: [CMD, python3, tools/health.py]
+      interval: 5s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    stop_grace_period: 25s

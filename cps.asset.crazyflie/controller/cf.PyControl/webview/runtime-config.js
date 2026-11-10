@@ -1,0 +1,1 @@
+window.CF_RUNTIME = {"ros_domain": 41, "webots_port": 1234, "rosbridge_port": 9090, "http_port": 5000, "web_port": 8080, "ws_port": 8765, "bind_host": "0.0.0.0", "drone_ids": [231, 232, 233, 234, 235, 236, 237, 238]};

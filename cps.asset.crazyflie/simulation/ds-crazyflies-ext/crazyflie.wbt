@@ -9,10 +9,10 @@ EXTERNPROTO "../protos/HalleTraversen.proto"
 
 IMPORTABLE EXTERNPROTO "../protos/Crazyflie.proto"
 
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/Floor.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/appearances/protos/CarpetFibers.proto" 
+EXTERNPROTO "../assets/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "../assets/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "../assets/R2023b/projects/objects/floors/protos/Floor.proto"
+EXTERNPROTO "../assets/R2023b/projects/appearances/protos/CarpetFibers.proto" 
 
 WorldInfo {
   info [
@@ -62,7 +62,6 @@ Crazyflie {
 
 Crazyflie {
   id 233
-  translation 1.0 0 0.15
   translation -1.0 0.5 0.15
 }
 
@@ -89,10 +88,4 @@ Crazyflie {
 Crazyflie {
   id 238
   translation 1.0 0.5 0.15
-}
-
-
-ControllableWand {
-  wand_id 1
-  translation -0.5 0 0.5
 }

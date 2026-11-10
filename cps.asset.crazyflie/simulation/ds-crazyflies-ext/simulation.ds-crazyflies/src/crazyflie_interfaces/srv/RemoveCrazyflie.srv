@@ -1,0 +1,4 @@
+string uri # The Uniform Resource Identifier (URI) of the crazyflie
+---
+bool success # True if removal was succesfull
+string msg # If no success this is the reason

@@ -1,0 +1,25 @@
+#VRML_SIM R2023a utf8
+EXTERNPROTO "../protos/Wand.proto"
+
+PROTO ControllableWand [
+    field SFInt32       wand_id     0
+    field SFVec3f       translation 0 0 0
+    field SFRotation    rotation    0 0 1 0
+]
+{
+    Robot {
+        name %<= '"' + 'Wand' + fields.wand_id.value + '"' >%
+        translation IS translation
+        rotation IS rotation
+        controller "<extern>" 
+        supervisor TRUE
+        synchronization FALSE
+        children [
+            Wand {
+                name %<= '"' + '_wand_body' + fields.wand_id.value + '"' >%
+                translation 0 0 0 
+                rotation  0 0 1 0
+            }
+        ]
+    }
+}

@@ -1,0 +1,10 @@
+**/.git
+**/__pycache__
+**/.runtime
+**/.pytest_cache
+**/build
+**/install
+**/log
+**/*.log
+**/webview/img
+**/*:Zone.Identifier

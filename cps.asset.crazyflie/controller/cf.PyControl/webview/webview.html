@@ -6,6 +6,7 @@
     <meta name="Webview" content="width=device-width, initial-scale=1.0">
     <title>UAV Statemachine Webview</title>
     <link rel="stylesheet" href="res/style.css">
+    <script src="runtime-config.js"></script>
     <script type="text/javascript" src="js/WebView.js"></script>
 </head>
 
@@ -20,7 +21,7 @@
     </table>
     
     <script>
-        // Set the title when the page loads
+        // 在页面加载时设置标题
         document.addEventListener('DOMContentLoaded', function() {
             const webview = new WebView();
             document.getElementById('droneTitle').textContent = `UAV State Machine - ${webview.droneId}`;

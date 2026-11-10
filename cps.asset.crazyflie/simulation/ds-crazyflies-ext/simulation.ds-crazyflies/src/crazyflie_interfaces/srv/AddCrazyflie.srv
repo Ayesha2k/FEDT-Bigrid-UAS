@@ -1,0 +1,6 @@
+string uri # The Uniform Resource Identifier (URI) of the crazyflie
+geometry_msgs/Pose initial_pose # The initial_pose we expect the crazyflie to be in
+string type "default" # Additional type to be matched up with with a .yaml file
+---
+bool success # True if the addition of the crazyflie was successfull
+string msg # If no succes this is the reason

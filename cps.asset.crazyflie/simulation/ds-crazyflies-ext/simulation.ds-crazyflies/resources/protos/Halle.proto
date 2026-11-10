@@ -1,0 +1,84 @@
+#VRML_SIM R2023b utf8
+# Describe the functionality of your PROTO here.
+EXTERNPROTO "../assets/R2023b/projects/appearances/protos/FormedConcrete.proto"
+
+PROTO Halle [
+  field SFVec3f translation 0 0 0
+]
+{
+ Solid {
+  translation IS translation
+  name "Halle"
+  children [
+    ## WandLang
+    Solid {
+      name "WandLang"
+      translation -10 15 5
+      children [
+        DEF WandLang Shape  {
+        appearance FormedConcrete {
+        }
+        geometry Box {
+        size 0.1 40 10
+        }
+      }
+      ]
+    }
+    Solid {
+        name "WandLang_"
+        translation 10 15 5
+        children [USE WandLang]
+    }
+     ## WandKurz
+    Solid {
+      name "WandKurz"
+      translation 0 -5 5
+      children [
+        DEF WandKurz Shape  {
+        appearance FormedConcrete {
+        }
+        geometry Box {
+        size 20 0.1 10
+        }
+      }
+      ]
+    }
+     Solid {
+        name "WandKurz_"
+        translation 0 35 5
+        children [USE WandKurz]
+    }
+     ## Decke
+    Solid {
+      name "Decke"
+      translation 0 15 10
+      children [
+        DEF Decke Shape  {
+        appearance FormedConcrete {
+        }
+        geometry Box {
+        size 20 40 0.1
+        }
+      }
+      ]
+    }
+    Solid {
+        name "Decke_"
+        translation 0 15 -0.1
+        children [USE Decke]
+    }
+
+
+      
+
+
+
+
+
+
+
+
+
+  ]
+ }
+}

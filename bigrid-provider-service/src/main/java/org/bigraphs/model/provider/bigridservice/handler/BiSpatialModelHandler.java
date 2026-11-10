@@ -247,9 +247,7 @@ public class BiSpatialModelHandler extends ServiceHandlerSupport {
                 .body(Mono.just(response), ResponseData_GenerateGrid.class);
     }
 
-    //------------------------------------------------------------------------------------------------------------------
     // Diagonal Directional Bi-Spatial Bigrid (with 8-directional routes)
-    //------------------------------------------------------------------------------------------------------------------
 
     /**
      * Creates a diagonal directional bigrid with POST request containing grid specifications.
@@ -348,9 +346,7 @@ public class BiSpatialModelHandler extends ServiceHandlerSupport {
                 .body(Mono.just(response), ResponseData_GenerateGrid.class);
     }
 
-    //------------------------------------------------------------------------------------------------------------------
     // Three-Dimensional Bi-Spatial Bigrid (with 10-directional routes including vertical)
-    //------------------------------------------------------------------------------------------------------------------
 
     /**
      * Creates a 3D bigrid with POST request containing 3D grid specifications.

@@ -1,2 +1,8 @@
 *.log
-cps.asset.crazyflie/controller/cf.PyControl/src/cache/
+
+**/.runtime/
+**/__pycache__/
+**/.pytest_cache/
+**/build/
+**/install/
+**/*:Zone.Identifier

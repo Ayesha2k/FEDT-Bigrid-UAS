@@ -1,0 +1,177 @@
+#VRML_SIM R2023b utf8
+# Describe the functionality of your PROTO here.
+EXTERNPROTO "../assets/R2023b/projects/appearances/protos/BrushedAluminium.proto"
+EXTERNPROTO "../assets/R2023b/projects/appearances/protos/WireFence.proto"
+
+
+PROTO HalleTraversen [
+  field SFVec3f translation 0 0 0
+]
+{
+ Solid {
+  name "Traversen"
+  translation IS translation
+  children [
+    ## Senkrechte
+    Solid {
+      name "Traverse6m"
+      translation 8 3 3
+      children [
+        DEF Traverse6mSenkrecht Shape  {
+        appearance BrushedAluminium {
+        }
+        geometry Box {
+        size 0.3 0.3 6
+        }
+      }
+      ]
+    }
+    Solid {
+      name "Traverse6mA"
+      translation 8 -3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mB"
+      translation 3 -3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mC"
+      translation 3 3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mD"
+      translation -2 -3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mE"
+      translation -2 3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mF"
+      translation -7 3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    Solid {
+      name "Traverse6mG"
+      translation -7 -3 3
+      children [USE Traverse6mSenkrecht]
+    }
+    ##Querstreben
+    Solid {
+      name "TraverseQuer"
+      translation 8 0  6
+      children [
+        DEF Traverse6mQueer Shape  {
+        appearance BrushedAluminium {
+        }
+        geometry Box {
+        size 0.3 6 0.3
+        }
+      }
+      ]
+    }
+    Solid {
+      name "TraverseQuerA"
+      translation 3 0 6
+      children [USE Traverse6mQueer]
+    }
+    Solid {
+      name "TraverseQuerB"
+      translation -2 0 6
+      children [USE Traverse6mQueer]
+    }
+    Solid {
+      name "TraverseQuerC"
+      translation -7 0 6
+      children [USE Traverse6mQueer]
+    }
+    ##Laengsstreben
+    Solid {
+      name "TraverseLaengs"
+      translation -4 3 6
+      children [
+        DEF Traverse6mLaengs Shape  {
+        appearance BrushedAluminium {
+        }
+        geometry Box {
+        size 6 0.3 0.3
+        }
+      }
+      ]
+    }
+    Solid {
+      name "TraverseLaengsA"
+      translation 0 3 6
+      children [USE Traverse6mLaengs]
+    }
+    Solid {
+      name "TraverseLaengsB"
+      translation 5 3 6
+      children [USE Traverse6mLaengs]
+    }
+    Solid {
+      name "TraverseLaengsC"
+      translation -4 -3 6
+      children [USE Traverse6mLaengs]
+    }
+    Solid {
+      name "TraverseLaengsD"
+      translation 0 -3 6
+      children [USE Traverse6mLaengs]
+    }
+    Solid {
+      name "TraverseLaengsE"
+      translation 5 -3 6
+      children [USE Traverse6mLaengs]
+    }
+    ### Netze
+    Solid {
+      name "Netz"
+      translation -2 3 3
+      children [
+        DEF MeshLarge Shape  {
+        appearance WireFence {
+          textureTransform TextureTransform {
+            scale 30 30
+          }
+        }
+        geometry Box {
+        size 10 0.01 6
+        }
+      }
+      ]
+    }
+    Solid {
+      name "NetzA"
+      translation -2 -3 3
+      children [USE MeshLarge]
+    }
+
+    Solid {
+      name "NetzLang"
+      translation -7 0 3
+      children [
+        Shape  {
+        appearance WireFence {
+          textureTransform TextureTransform {
+            scale 30 30
+          }
+        }
+        geometry Box {
+        size 0.01 6 6
+        }
+      }
+      ]
+    }
+
+
+
+
+  ]
+  }
+}

@@ -1,6 +1,0 @@
-Defaulting to user installation because normal site-packages is not writeable
-Requirement already satisfied: requests in /home/crazy/.local/lib/python3.10/site-packages (2.32.3)
-Requirement already satisfied: charset-normalizer<4,>=2 in /home/crazy/.local/lib/python3.10/site-packages (from requests) (3.4.0)
-Requirement already satisfied: idna<4,>=2.5 in /usr/lib/python3/dist-packages (from requests) (3.3)
-Requirement already satisfied: urllib3<3,>=1.21.1 in /home/crazy/.local/lib/python3.10/site-packages (from requests) (2.2.3)
-Requirement already satisfied: certifi>=2017.4.17 in /home/crazy/.local/lib/python3.10/site-packages (from requests) (2024.8.30)

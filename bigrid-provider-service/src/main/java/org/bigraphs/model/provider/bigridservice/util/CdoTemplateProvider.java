@@ -24,7 +24,6 @@ public final class CdoTemplateProvider {
     return new CdoTemplate(dbFactory);
   }
 
-
   public void remove(Key key) {
     CdoTemplate template = cache.remove(key);
     closeQuietly(template);
@@ -36,8 +35,6 @@ public final class CdoTemplateProvider {
   }
 
   private static void closeQuietly(Object o) {
-//    if (o instanceof AutoCloseable c) {
-//      try { c.close(); } catch (Exception ignored) {}
-//    }
+
   }
 }
