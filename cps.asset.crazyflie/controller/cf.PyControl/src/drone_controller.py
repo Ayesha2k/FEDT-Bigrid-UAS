@@ -93,16 +93,21 @@ def evaluate(pieces, elapsed, timescale=1.0, reverse=False):
 
 class DroneController:
     def __init__(self, drone_id, transport, image_dir=None, goal_tolerance=0.08,
-                 telemetry_timeout=2.0, operation_timeout=60.0):
+                 telemetry_timeout=2.0, operation_timeout=60.0, brake_acceleration=0.5):
         self.drone_id, self.transport = drone_id, transport
         self.state = DroneState(drone_id, image_dir)
         self.goal_tolerance = goal_tolerance
         self.telemetry_timeout = telemetry_timeout
         self.operation_timeout = operation_timeout
+        self.brake_acceleration = positive(brake_acceleration, "brake_acceleration")
         self._lock = threading.RLock()
         self._commands = threading.RLock()
         self._uploads = threading.RLock()
         self._pending_trajectory = None
+        self._vehicle_trajectories = set()
+        self._active_trajectory = None
+        self._holding = None
+        self._streaming = False
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix=drone_id)
         self._changed = threading.Event()
         self._cancel = threading.Event()
@@ -117,12 +122,49 @@ class DroneController:
         self._initial_position = None
         self._hold_target = None
         self._external_action = None
+        self._wall = None
         self._closed = False
         self._shutdown = threading.Event()
         self._disconnected_phase = "active"
         transport.on_telemetry = self.update_telemetry
         self._watchdog = threading.Thread(target=self._watch_connection, daemon=True, name=f"link-{drone_id}")
         self._watchdog.start()
+        self._holder = threading.Thread(target=self._hold_loop, daemon=True, name=f"hold-{drone_id}")
+        self._holder.start()
+
+    def _yaw(self):
+        x, y, z, w = self.telemetry["orientation"]
+        return math.atan2(2 * (w*z+x*y), 1-2*(y*y+z*z))
+
+    def _hold_loop(self):
+        while not self._shutdown.wait(0.02):
+            with self._commands:
+                if self._holding is None:
+                    continue
+                try:
+                    target, yaw = self._holding
+                    self.transport.command("hold", goal=target, yaw=yaw)
+                except Exception as exc:
+                    self._holding = None
+                    self._cancel.set()
+                    self.state.set("fault", "hold_failed", str(exc))
+
+    def _set_hold(self, cancel, target, yaw):
+        with self._commands:
+            if cancel.is_set():
+                raise InterruptedError()
+            self.transport.command("hold", goal=target, yaw=yaw)
+            self._holding = (target[:], yaw)
+            self._hold_target = target[:]
+            self._streaming = True
+
+    def _publish_reference(self, cancel, sample):
+        with self._commands:
+            if cancel.is_set():
+                raise InterruptedError()
+            self._holding = None
+            self.transport.publish_full_state(sample)
+            self._streaming = True
 
     def _watch_connection(self):
         while not self._shutdown.wait(0.2):
@@ -151,7 +193,7 @@ class DroneController:
                     phase = "hovering" if position[2] > 0.10 else "landed"
                 else:
                     phase = {2: {"takeoff": "taking_off", "land": "landing"}.get(self._external_action, "navigating"),
-                             3: "full_state", 4: "hovering", 5: "trajectory"}.get(mode)
+                             3: "full_state", 4: "hovering", 5: "trajectory", 6: "navigating"}.get(mode)
                 if phase:
                     self.state.set(phase, "external_ros")
         self._changed.set()
@@ -160,6 +202,9 @@ class DroneController:
         with self._lock:
             return dict(self.state.snapshot(), drone_id=self.drone_id,
                         sim_time=self.transport.now(),
+                        clock_type="simulation" if getattr(self.transport, "use_sim_time", False) else "wall",
+                        backend=getattr(self.transport, "backend", "test"),
+                        services_ready=getattr(self.transport, "services_ready", lambda: True)(),
                         queue_length=len(self._queue), active_target=copy.deepcopy(self.active_target),
                         task_id=self._current, telemetry=copy.deepcopy(self.telemetry),
                         connected=self._fresh())
@@ -173,7 +218,8 @@ class DroneController:
     def _fresh(self):
         return (self._last_telemetry is not None
                 and self.transport.now() - self._last_telemetry <= self.telemetry_timeout
-                and time.monotonic() - self._last_wall_telemetry <= self.telemetry_timeout)
+                and (getattr(self.transport, "use_sim_time", False)
+                     or time.monotonic() - self._last_wall_telemetry <= self.telemetry_timeout))
 
     def _position(self):
         with self._lock:
@@ -187,6 +233,11 @@ class DroneController:
         with self._commands:
             if cancel.is_set():
                 raise InterruptedError()
+            if name in ("takeoff", "land", "go_to", "start_trajectory"):
+                self._holding = None
+                if self._streaming:
+                    self.transport.command("notify_setpoints_stop", remain_valid_millisecs=0)
+                    self._streaming = False
             self.transport.command(name, **payload)
 
     def _submit(self, action, phase, function):
@@ -201,7 +252,8 @@ class DroneController:
             self._external_action = None
             self._generation += 1
             generation = self._generation
-            self._tasks[task_id] = dict(task_id=task_id, action=action, status="queued", error=None)
+            self._tasks[task_id] = dict(task_id=task_id, action=action, status="queued", error=None,
+                                       created_at=self.transport.now())
             self.state.set(phase, action)
             self._worker.submit(self._run, task_id, generation, cancel, function)
             return task_id
@@ -212,6 +264,7 @@ class DroneController:
                 if cancel.is_set():
                     return
                 self._tasks[task_id]["status"] = "running"
+                self._tasks[task_id]["started_at"] = self.transport.now()
             while True:
                 finish_phase = function(cancel)
                 with self._lock:
@@ -221,7 +274,9 @@ class DroneController:
                         if self._tasks[task_id]["action"] == "navigate" and self._queue:
                             continue
                         self._tasks[task_id]["status"] = "completed"
-                        self._hold_target = copy.deepcopy(self.active_target)
+                        if self.active_target is not None:
+                            self._hold_target = copy.deepcopy(self.active_target)
+                        self._active_trajectory = None
                         self.active_target = None
                         self.state.set(finish_phase or "hovering", "completed")
                     return
@@ -231,13 +286,15 @@ class DroneController:
             try:
                 with self._commands:
                     if not cancel.is_set():
-                        self.transport.command("notify_setpoints_stop", remain_valid_millisecs=0)
+                        if self._fresh():
+                            self._set_hold(cancel, self._position(), self._yaw())
             except Exception:
                 pass
             with self._lock:
                 if generation == self._generation and not cancel.is_set():
                     self._tasks[task_id].update(status="failed", error=str(exc))
                     self.active_target = None
+                    self._active_trajectory = None
                     self._queue.clear()
                     self.state.set("fault", "failed", str(exc))
 
@@ -310,35 +367,65 @@ class DroneController:
                 raise InterruptedError()
             return self._submit("navigate", "navigating", fly)
 
-    def stop(self):
-        with self._lock:
-            self._cancel.set()
-            self._generation += 1
-            if self._current and self._tasks[self._current]["status"] in ("queued", "running"):
-                self._tasks[self._current]["status"] = "cancelled"
-            self._queue.clear()
-            self.active_target = None
+    def stop(self, release=True):
+        # Cancellation and the last old write share the same dispatch lock.
+        with self._commands:
+            with self._lock:
+                self._cancel.set()
+                self._generation += 1
+                if self._current and self._tasks[self._current]["status"] in ("queued", "running"):
+                    self._tasks[self._current]["status"] = "cancelled"
+                self._queue.clear()
+                self.active_target = None
+                self._active_trajectory = None
+            self._holding = None
+            if release:
+                self.transport.command("notify_setpoints_stop", remain_valid_millisecs=0)
+                self._streaming = False
         self._changed.set()
-        with self._uploads:
-            self._pending_trajectory = None
-        with self._commands:
-            self.transport.command("notify_setpoints_stop", remain_valid_millisecs=0)
+        if self._wall:
+            self._wall.stop()
+            self._wall = None
 
-    def hover(self, target=None, yaw=0.0):
-        target = vector(target) if target is not None else self._position()
-        yaw = finite(yaw, "yaw")
-        self.stop()
-        with self._commands:
-            self.transport.command("hold", goal=target, yaw=yaw)
-        self.state.set("hovering", "hover")
-        self._hold_target = target[:]
-        self._external_action = None
+    def hover(self, target=None, yaw=None):
+        position = self._position()
+        velocity = self.telemetry["velocity"][:]
+        yaw = self._yaw() if yaw is None else finite(yaw, "yaw")
+        target = vector(target) if target is not None else None
+        speed = math.sqrt(sum(v*v for v in velocity))
+        # Cubic velocity decay gives continuous velocity/acceleration. This is
+        # a braking reference, not a guarantee of obstacle-free stopping space.
+        duration = max(0.2, 1.5 * speed / self.brake_acceleration)
+        braking = speed > 0.05
+        end = [position[i] + velocity[i] * duration / 2 for i in range(3)] if braking else position
+        if target is not None and math.dist(target, end) > self.goal_tolerance:
+            raise ControlError("Hover target must be near the braking endpoint; use move/realtime to relocate")
+        end = target or end
+        self.stop(release=False)
+        def hold(cancel):
+            self.active_target = end
+            if braking:
+                start = self.transport.now()
+                while self.transport.now() - start < duration:
+                    if cancel.is_set():
+                        raise InterruptedError()
+                    self._position()
+                    u = max(0.0, min(1.0, (self.transport.now()-start)/duration))
+                    self._publish_reference(cancel, dict(
+                        position=[position[i]+velocity[i]*duration*(u-u**3+0.5*u**4) for i in range(3)],
+                        velocity=[v*(1-3*u*u+2*u**3) for v in velocity],
+                        acceleration=[v*(-6*u+6*u*u)/duration for v in velocity],
+                        yaw=yaw, omega=[0, 0, 0]))
+                    cancel.wait(.02)
+            self._set_hold(cancel, end, yaw)
+            self._wait_goal(cancel, end)
+        return self._submit("hover", "braking", hold)
 
     def land(self, height=0.0, duration=2.0):
         height, duration = finite(height, "height"), positive(duration)
         target = self._position()
         target[2] = height + 0.02
-        self.stop()
+        self.stop(release=False)
         def descend(cancel):
             self.active_target = target
             self._send(cancel, "land", height=height, duration=duration)
@@ -348,32 +435,68 @@ class DroneController:
 
     def move(self, target, velocity=0.1, timeout=60.0):
         target, velocity, timeout = vector(target), positive(velocity, "velocity"), positive(timeout, "timeout")
-        start = self._position()
-        self.hover(start)
+        self._position()
+        self.stop(release=False)
         def fly(cancel):
             self.active_target = target
-            self._send(cancel, "go_to", goal=target, duration=max(0.1, math.dist(start, target) / velocity))
+            yaw = self._yaw()
+            last = start = self.transport.now()
+            previous = self.telemetry["velocity"][:]
+            with self._commands:
+                self._holding = None
+            while not cancel.is_set():
+                current = self._position()
+                now = self.transport.now()
+                if now < last:
+                    raise ControlError("Controller clock reset", 503)
+                dt = min(.1, max(0.0, now-last))
+                error = [target[i]-current[i] for i in range(3)]
+                distance = math.sqrt(sum(x*x for x in error))
+                limit = min(velocity, math.sqrt(2*self.brake_acceleration*distance), distance*1.5)
+                desired = [x/distance*limit for x in error] if distance else [0, 0, 0]
+                delta = [desired[i]-previous[i] for i in range(3)]
+                norm = math.sqrt(sum(x*x for x in delta))
+                scale = min(1.0, self.brake_acceleration*dt/norm) if norm else 1.0
+                previous = [previous[i]+delta[i]*scale for i in range(3)]
+                with self._commands:
+                    if cancel.is_set():
+                        raise InterruptedError()
+                    self.transport.publish_velocity(previous, 0.0)
+                    self._streaming = True
+                if distance <= self.goal_tolerance and math.sqrt(sum(v*v for v in previous)) <= .05:
+                    break
+                if now-start > timeout:
+                    raise TimeoutError("Real-time movement timed out")
+                last = now
+                cancel.wait(.02)
+            self._set_hold(cancel, target, yaw)
             self._wait_goal(cancel, target, timeout)
         return self._submit("move/realtime", "navigating", fly)
 
-    def upload(self, trajectory_id, pieces, piece_offset=0):
+    def upload(self, trajectory_id, pieces, piece_offset=0, upload_to_vehicle=True):
+        if not isinstance(upload_to_vehicle, bool):
+            raise ValueError("upload_to_vehicle must be a boolean")
         with self._uploads:
-            if self._pending_trajectory == int(trajectory_id):
-                raise ControlError("Trajectory start acknowledgement is pending")
-            return self._upload(trajectory_id, pieces, piece_offset)
+            if self._pending_trajectory == int(trajectory_id) or self._active_trajectory == int(trajectory_id):
+                raise ControlError("Cannot replace an active trajectory; stop it first")
+            return self._upload(trajectory_id, pieces, piece_offset, upload_to_vehicle)
 
-    def _upload(self, trajectory_id, pieces, piece_offset=0):
+    def _upload(self, trajectory_id, pieces, piece_offset=0, upload_to_vehicle=True):
         trajectory_id = integer(trajectory_id, "trajectory_id", 0, 255)
         piece_offset = integer(piece_offset, "piece_offset", 0, 4096)
         pieces = validate_pieces(pieces)
         previous = copy.deepcopy(self._trajectories.get(trajectory_id, []))
         if piece_offset > len(previous):
             raise ValueError("piece_offset would create a gap")
-        updated = previous[:]
+        updated = previous[:] if piece_offset else []
         updated[piece_offset:piece_offset + len(pieces)] = pieces
-        with self._commands:
+        if upload_to_vehicle:
+            # Never hold the flight dispatch lock during a radio memory write.
             self.transport.command("upload_trajectory", trajectory_id=trajectory_id,
-                                   piece_offset=piece_offset, pieces=pieces)
+                                   piece_offset=0, pieces=updated)
+            self._vehicle_trajectories.add(trajectory_id)
+        else:
+            self._vehicle_trajectories.discard(trajectory_id)
         self._trajectories[trajectory_id] = updated
 
     def start_trajectory(self, trajectory_id=0, timescale=1.0, reverse=False,
@@ -395,19 +518,26 @@ class DroneController:
             raise ValueError("reversed and relative must be booleans")
         if trajectory_id not in self._trajectories:
             raise ValueError("Trajectory has not been uploaded through this controller")
+        if not full_state and trajectory_id not in self._vehicle_trajectories:
+            raise ControlError("Trajectory is cached for FullState only; upload to vehicle before native start")
         if self.state.phase != "hovering":
             raise ControlError("Trajectory requires hovering state")
         pieces = copy.deepcopy(self._trajectories[trajectory_id])
         measured = self._position()
-        position = self.telemetry.get("motion", {}).get("setpoint") or self._hold_target or measured
+        position = self._hold_target or measured
         initial = evaluate(pieces, 0, timescale, reverse)["position"]
+        initial_velocity = evaluate(pieces, 0, timescale, reverse)["velocity"]
+        if math.sqrt(sum(v*v for v in initial_velocity)) > .15:
+            raise ControlError("Trajectory must start near rest; provide a smooth connection from hover")
+        if not relative and math.dist(measured, initial) > self.goal_tolerance:
+            raise ControlError("Absolute trajectory must start at the current hovering position")
         offset = [position[i] - initial[i] for i in range(3)] if relative else [0, 0, 0]
         total = sum(p["duration"] for p in pieces) * timescale
         final = evaluate(pieces, total, timescale, reverse)["position"]
         target = [final[i] + offset[i] for i in range(3)]
         def fly(cancel):
             self.active_target = target
-            start = self.transport.now()
+            self._active_trajectory = trajectory_id
             try:
                 if not full_state:
                     self._send(cancel, "start_trajectory", trajectory_id=trajectory_id,
@@ -416,25 +546,49 @@ class DroneController:
                 with self._uploads:
                     if self._pending_trajectory == trajectory_id:
                         self._pending_trajectory = None
+            start = self.transport.now()
+            with self._lock:
+                if cancel.is_set():
+                    raise InterruptedError()
+                self._tasks[self._current]["trajectory_started_at"] = start
             next_send = start
             while not cancel.is_set() and self.transport.now() - start < total:
+                self._position()
                 now = self.transport.now()
                 if full_state and now >= next_send:
                     sample = evaluate(pieces, now - start, timescale, reverse)
                     sample["position"] = [sample["position"][i] + offset[i] for i in range(3)]
-                    with self._commands:
-                        if not cancel.is_set():
-                            self.transport.publish_full_state(sample)
+                    self._publish_reference(cancel, sample)
                     next_send = now + 1.0 / rate
                 cancel.wait(0.005)
             if cancel.is_set():
                 raise InterruptedError()
             if full_state:
-                self._send(cancel, "notify_setpoints_stop", remain_valid_millisecs=0)
-                self._send(cancel, "hold", goal=target)
+                self._set_hold(cancel, target, evaluate(pieces, total, timescale, reverse)["yaw"])
             self._wait_goal(cancel, target)
         return self._submit("full_state" if full_state else "trajectory",
                             "full_state" if full_state else "trajectory", fly)
+
+    def start_wall_follow(self, data):
+        if self.state.phase != "hovering":
+            raise ControlError("Wall following requires hovering state")
+        from wall_following import WallFollowingConfig, WallFollowingOrchestrator
+        data = dict(data)
+        if self.state._image_dir:
+            data.setdefault("image_output_base_dir", str(self.state._image_dir.parent.parent / "wall_following/img"))
+        config = WallFollowingConfig.from_request(robot_prefix=f"/{self.drone_id}", request_data=data)
+        config.use_sim_time = getattr(self.transport, "use_sim_time", False)
+        self.stop(release=False)
+        self._wall = WallFollowingOrchestrator(self.transport.executor)
+        if not self._wall.start(config):
+            self._wall = None
+            raise ControlError("Wall following node failed to start", 503)
+        self._streaming = True
+        def follow(cancel):
+            while not cancel.wait(0.05):
+                self._position()
+            raise InterruptedError()
+        return self._submit("wall_follow/start", "mapping", follow)
 
     def close(self):
         if self._closed:
@@ -442,8 +596,11 @@ class DroneController:
         self._closed = True
         self._shutdown.set()
         self._watchdog.join(timeout=1)
+        self._holder.join(timeout=2)
         self._cancel.set()
         self._changed.set()
+        if self._wall:
+            self._wall.stop()
         self._worker.shutdown(wait=True, cancel_futures=True)
         self.state.close()
         self.transport.close()
@@ -451,7 +608,7 @@ class DroneController:
 
 class RosTransport:
     """Owns a dedicated ROS executor. Never imports another overlay or cflib."""
-    def __init__(self, drone_id, use_sim_time=True, require_report=False):
+    def __init__(self, drone_id, use_sim_time=True, require_report=False, backend=None):
         import rclpy
         from rclpy.node import Node
         from rclpy.parameter import Parameter
@@ -461,10 +618,13 @@ class RosTransport:
         from crazyflie_interfaces.msg import Status
         from std_msgs.msg import String
         self.rclpy, self.drone_id = rclpy, drone_id
+        self.use_sim_time = use_sim_time
+        self.backend = backend or ("webots" if use_sim_time else "hardware")
         self.node = Node(f"http_{drone_id}", parameter_overrides=[Parameter("use_sim_time", value=use_sim_time)])
         self.on_telemetry = None
         self._clients, self._publishers = {}, {}
         self._rpc_lock = threading.RLock()
+        self._upload_rpc_lock = threading.RLock()
         self._report_ready = threading.Condition()
         self._reports = {}
         self._report_count = 0
@@ -483,11 +643,30 @@ class RosTransport:
     def now(self):
         return self.node.get_clock().now().nanoseconds / 1e9
 
+    def services_ready(self):
+        services = dict(self.node.get_service_names_and_types())
+        ready = all(f"/{self.drone_id}/{name}" in services for name in
+                    ("takeoff", "land", "go_to", "notify_setpoints_stop", "upload_trajectory", "start_trajectory"))
+        if self.backend == "hardware":
+            ready = ready and self.node.count_publishers(f"/{self.drone_id}/control_result") > 0
+            ready = ready and self.node.count_subscribers(f"/{self.drone_id}/cmd_velocity_world") > 0
+        return ready
+
     def _odom(self, msg):
         if self.on_telemetry:
             p, v, q = msg.pose.pose.position, msg.twist.twist.linear, msg.pose.pose.orientation
             self._orientation = [q.x, q.y, q.z, q.w]
-            self.on_telemetry(position=[p.x, p.y, p.z], velocity=[v.x, v.y, v.z],
+            velocity = [v.x, v.y, v.z]
+            if self.backend == "hardware":
+                # The cflib Kalman log exposes body-frame velocity; motion
+                # planning uses world coordinates. Webots already sends world v.
+                u = [q.x, q.y, q.z]
+                def cross(a, b):
+                    return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
+                uv = cross(u, velocity)
+                uuv = cross(u, uv)
+                velocity = [velocity[i]+2*q.w*uv[i]+2*uuv[i] for i in range(3)]
+            self.on_telemetry(position=[p.x, p.y, p.z], velocity=velocity,
                               orientation=[q.x, q.y, q.z, q.w], **self._sensors)
 
     def _scan(self, msg):
@@ -528,7 +707,9 @@ class RosTransport:
         self._publishers[name].publish(msg)
 
     def command(self, name, **data):
-        with self._rpc_lock:
+        if name == "hold":
+            return self._command(name, **data)
+        with self._upload_rpc_lock if name == "upload_trajectory" else self._rpc_lock:
             return self._command(name, **data)
 
     def _command(self, name, **data):
@@ -574,7 +755,7 @@ class RosTransport:
         future = client.call_async(req)
         done = threading.Event()
         future.add_done_callback(lambda _: done.set())
-        if not done.wait(5):
+        if not done.wait(35 if name == "upload_trajectory" else 5):
             future.cancel()
             raise TimeoutError(f"ROS service {name} did not respond")
         response = future.result()
@@ -582,13 +763,14 @@ class RosTransport:
             raise RuntimeError(f"ROS service {name} failed")
         if hasattr(response, "success") and not response.success:
             raise ControlError(getattr(response, "message", "ROS command rejected"), 400)
-        if self.require_report and name in ("takeoff", "land", "go_to", "upload_trajectory", "start_trajectory"):
+        if ((self.require_report and name in ("takeoff", "land", "go_to", "upload_trajectory", "start_trajectory"))
+                or (self.backend == "hardware" and name == "upload_trajectory")):
             with self._report_ready:
                 if not self._report_ready.wait_for(lambda: self._reports.get(name, (0, None))[0] > report_before, timeout=2):
                     raise TimeoutError(f"Missing execution acknowledgement for {name}")
                 result = self._reports[name][1]
             if not result.get("success"):
-                raise ControlError(result.get("error", "Webots command rejected"), 400)
+                raise ControlError(result.get("error", "ROS command rejected"), 400)
 
     @staticmethod
     def _duration(seconds):
@@ -603,6 +785,11 @@ class RosTransport:
             "twist": {"linear": dict(zip(("x", "y", "z"), sample["velocity"])),
                       "angular": dict(zip(("x", "y", "z"), sample["omega"]))},
             "acc": dict(zip(("x", "y", "z"), sample["acceleration"]))})
+
+    def publish_velocity(self, velocity, yaw_rate=0.0):
+        # Both cflib and the Webots wire interface use degrees/s here.
+        self._publish("cmd_velocity_world", "crazyflie_interfaces/msg/VelocityWorld",
+                      dict(vel=dict(zip(("x", "y", "z"), velocity)), yaw_rate=math.degrees(yaw_rate)))
 
     def close(self):
         self.executor.shutdown(timeout_sec=2)

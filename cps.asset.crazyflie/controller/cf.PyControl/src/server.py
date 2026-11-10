@@ -7,6 +7,7 @@ import logging
 import math
 from pathlib import Path
 import signal
+import socketserver
 import threading
 
 from flask import Flask, jsonify, request
@@ -74,11 +75,14 @@ def create_app(controller, web_root=None):
 
     @app.get("/capabilities")
     def capabilities():
-        return jsonify(drone_id=controller.drone_id, backend="ros2",
-                       webots_motion_limits={"linear_m_s": 3.0, "angular_rad_s": 6.0} if getattr(controller.transport, "require_report", False) else None,
+        backend = getattr(controller.transport, "backend", "test")
+        return jsonify(drone_id=controller.drone_id, backend="ros2", execution_backend=backend,
+                       clock_type=controller.snapshot()["clock_type"],
+                       features=["native_trajectory", "full_state", "host_trajectory_cache", "stop_and_hold", "world_velocity"],
+                       webots_motion_limits={"linear_m_s": 3.0, "angular_rad_s": 6.0} if backend == "webots" else None,
                        task_status=["queued", "running", "completed", "failed", "cancelled"],
                        trajectories="piecewise polynomial, constant coefficient first",
-                       dynamics="simplified Webots motion; not firmware or motor-level equivalence")
+                       dynamics="simplified Webots motion" if backend == "webots" else "Crazyflie firmware via Crazyswarm2")
 
     @app.post("/activate_idle")
     def idle():
@@ -116,8 +120,8 @@ def create_app(controller, web_root=None):
         supplied = [k in p for k in ("x", "y", "z")]
         if any(supplied) and not all(supplied):
             raise ValueError("Provide all of x/y/z or no coordinates")
-        controller.hover(coordinates(p) if all(supplied) else None, p.get("yaw", 0))
-        return reply("Real-time hover")
+        task = controller.hover(coordinates(p) if all(supplied) else None, p.get("yaw"))
+        return reply("Braking and holding position", task)
 
     @app.post("/move/realtime")
     def move():
@@ -128,13 +132,13 @@ def create_app(controller, web_root=None):
     @app.post("/stop_controller")
     @app.post("/trajectory/stop")
     def stop():
-        controller.hover()
-        return reply("Controller stopped; holding position")
+        task = controller.hover()
+        return reply("Stop accepted; wait for the task to complete before restarting", task)
 
     @app.post("/trajectory/upload")
     def upload():
         p = data()
-        controller.upload(p.get("trajectory_id", 0), p["pieces"], p.get("piece_offset", 0))
+        controller.upload(p.get("trajectory_id", 0), p["pieces"], p.get("piece_offset", 0), p.get("upload_to_vehicle", True))
         return reply("Trajectory uploaded", trajectory_id=int(p.get("trajectory_id", 0)))
 
     @app.post("/trajectory/start")
@@ -149,6 +153,17 @@ def create_app(controller, web_root=None):
     def task(task_id):
         return jsonify(controller.task(task_id))
 
+    @app.post("/wall_follow/start")
+    def wall_start():
+        p = data()
+        task = controller.start_wall_follow(p)
+        return reply("Wall following started", task, config=p)
+
+    @app.post("/wall_follow/stop")
+    def wall_stop():
+        task = controller.hover()
+        return reply("Wall following stopping; holding position", task)
+
     def lifecycle(event):
         controller.lifecycle(event)
         return reply("Transitioned")
@@ -157,11 +172,55 @@ def create_app(controller, web_root=None):
     return app
 
 
+class CompatibilityIPC(socketserver.ThreadingUnixStreamServer):
+    """Local JSON lines between separate ROS overlays, never a public TCP API."""
+    daemon_threads = True
+    def __init__(self, path, controller):
+        self.controller = controller
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(inner):
+                try:
+                    raw = inner.rfile.readline(4 * 1024 * 1024 + 1)
+                    if len(raw) > 4 * 1024 * 1024:
+                        raise ValueError("IPC request too large")
+                    p = json.loads(raw)
+                    if p["action"] == "snapshot":
+                        result = controller.snapshot()
+                    elif p["action"] == "command":
+                        name, payload = p["name"], p.get("payload", {})
+                        allowed = {"cmd_full_state", "cmd_hover", "cmd_position", "cmd_velocity_world", "takeoff", "land", "go_to", "notify_setpoints_stop", "upload_trajectory", "start_trajectory", "hold", "add_crazyflie", "remove_crazyflie", "set_group_mask", "stop"}
+                        if name not in allowed or not isinstance(payload, dict):
+                            raise ValueError("Unsupported IPC command")
+                        if name not in ("add_crazyflie", "remove_crazyflie", "set_group_mask", "upload_trajectory"):
+                            if controller._holding is not None or (controller._current and controller.task(controller._current)["status"] in ("queued", "running")):
+                                controller.stop()
+                            controller._external_action = name
+                        if name in ("cmd_full_state", "cmd_hover", "cmd_position", "cmd_velocity_world"):
+                            types = dict(cmd_full_state="FullState", cmd_hover="Hover", cmd_position="Position", cmd_velocity_world="VelocityWorld")
+                            controller.transport._publish(name, "crazyflie_interfaces/msg/" + types[name], payload)
+                        elif name in ("takeoff", "land", "go_to", "notify_setpoints_stop", "upload_trajectory", "start_trajectory", "hold", "add_crazyflie", "remove_crazyflie", "set_group_mask", "stop"):
+                            controller.transport.command(name, **payload)
+                        else:
+                            raise ValueError("Unsupported IPC command")
+                        result = {"ok": True}
+                    else:
+                        raise ValueError("Unknown IPC action")
+                    inner.wfile.write(json.dumps({"ok": True, "result": result}, allow_nan=False).encode() + b"\n")
+                except Exception as exc:
+                    inner.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode() + b"\n")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Fail on a live/stale socket instead of deleting another instance's IPC.
+        super().__init__(str(path), Handler)
+        path.chmod(0o600)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--drone_id", default="cf231")
+    parser.add_argument("--backend", choices=("hardware", "webots"))
     clock = parser.add_mutually_exclusive_group()
     clock.add_argument("--use-sim-time", dest="use_sim_time", action="store_true")
     clock.add_argument("--use-wall-time", dest="use_sim_time", action="store_false")
@@ -172,14 +231,17 @@ def main(argv=None):
     parser.add_argument("--wshost", default="0.0.0.0")
     parser.add_argument("--wsport", type=int, default=8765)
     parser.add_argument("--web-root", type=Path, default=Path(__file__).resolve().parents[1] / "webview")
+    parser.add_argument("--ipc-dir", type=Path)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     import rclpy
     from waitress import create_server
     rclpy.init()
-    controller = DroneController(args.drone_id, RosTransport(args.drone_id, use_sim_time=args.use_sim_time, require_report=args.require_command_report),
+    controller = DroneController(args.drone_id, RosTransport(args.drone_id, use_sim_time=args.use_sim_time,
+                                 require_report=args.require_command_report, backend=args.backend),
                                  image_dir=args.web_root / "img")
     http = None
+    ipc = None
     stopped = threading.Event()
     def shutdown(*_):
         stopped.set()
@@ -188,6 +250,9 @@ def main(argv=None):
     try:
         http = create_server(create_app(controller, args.web_root), host=args.host, port=args.port, threads=8)
         threading.Thread(target=http.run, daemon=True).start()
+        if args.ipc_dir:
+            ipc = CompatibilityIPC(args.ipc_dir / f"{args.drone_id}.sock", controller)
+            threading.Thread(target=ipc.serve_forever, daemon=True).start()
         if args.wsendpoint:
             async def websocket_main():
                 import websockets
@@ -212,6 +277,10 @@ def main(argv=None):
             threading.Thread(target=lambda: asyncio.run(websocket_main()), daemon=True).start()
         stopped.wait()
     finally:
+        if ipc:
+            ipc.shutdown()
+            ipc.server_close()
+            Path(ipc.server_address).unlink(missing_ok=True)
         if http:
             http.close()
         controller.close()

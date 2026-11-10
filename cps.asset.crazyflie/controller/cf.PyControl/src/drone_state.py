@@ -8,10 +8,10 @@ import os
 
 PHASES = (
     "installed", "resolved", "starting", "active", "stopping", "uninstalled", "idle", "taking_off", "hovering", "navigating", "trajectory",
-    "full_state", "mapping", "landing", "landed", "fault", "offline", "shutdown",
+    "full_state", "mapping", "braking", "landing", "landed", "fault", "offline", "shutdown",
 )
 PUBLIC_STATE_NAMES = {"taking_off": "flying", "navigating": "flying", "trajectory": "flying",
-                      "full_state": "flying", "mapping": "flying", "landed": "landing",
+                      "full_state": "flying", "mapping": "flying", "braking": "flying", "landed": "landing",
                       "fault": "error", "offline": "offline"}
 
 
@@ -62,6 +62,8 @@ class DroneState:
                 graph.add_edge(pydot.Edge("hovering", name))
                 graph.add_edge(pydot.Edge(name, "hovering"))
                 graph.add_edge(pydot.Edge(name, "landing"))
+                graph.add_edge(pydot.Edge(name, "braking"))
+            graph.add_edge(pydot.Edge("braking", "hovering"))
             data = graph.create_png()
             self._image_dir.mkdir(parents=True, exist_ok=True)
             image = self._image_dir / f"uav{revision}.png"
