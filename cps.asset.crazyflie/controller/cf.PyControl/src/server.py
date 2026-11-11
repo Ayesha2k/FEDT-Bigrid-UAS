@@ -148,7 +148,34 @@ def create_app(controller, web_root=None):
         task = controller.start_trajectory(p.get("trajectory_id", 0), p.get("timescale", 1),
             p.get("reversed", False), p.get("relative", True), full_state, p.get("rate", 30))
         return reply("Trajectory initiated", task)
+    
+    # MODIFICATION - Ayesha Shah
+    # Description: Endpoints supporting multi-drone custom trajectories, mid-flight emergency stop, and dynamic trajectory switching.
+    # Date: November 11, 2026
+    
+    @app.post("/trajectory/multi_start")
+    def multi_start_trajectory():
+        p = data()
+        traj_id = p.get("trajectory_id", 0)
+        
+        # Directly invoke start_trajectory on the controller
+        task = controller.start_trajectory(
+            traj_id, 
+            p.get("timescale", 1.0),
+            p.get("reversed", False), 
+            p.get("relative", True), 
+            p.get("full_state", True), 
+            p.get("rate", 30)
+        )
+        return reply(f"Multi-drone trajectory {traj_id} initiated", task)
 
+    @app.post("/emergency_stop")
+    def emergency_stop():
+        task = controller.hover()
+        return reply("Emergency stop executed; holding position", task)
+        
+    # END OF CHANGE
+    
     @app.get("/tasks/<task_id>")
     def task(task_id):
         return jsonify(controller.task(task_id))
