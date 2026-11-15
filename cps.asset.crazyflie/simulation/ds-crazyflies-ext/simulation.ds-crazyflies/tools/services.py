@@ -35,7 +35,6 @@ def start_services(processes, config, simulated=True, environment=None, extra=()
         processes.spawn(name, command, env=env, cwd=CF / "src")
         for key, entry, prefix in (
             ("web_port", Path(__file__).with_name("web.py"), "web"),
-            ("wall_port", CF / "src/wall_following/wall_following_webview_server.py", "wall"),
         ):
             command = [sys.executable, str(entry), "--directory", str(web),
                        "--port", str(config[key]+i), "--host", config["bind_host"]]
@@ -57,7 +56,7 @@ def await_services(processes, config, require_telemetry=True, timeout=100):
                 if require_telemetry and config["drone_ids"][i] in required and (
                         not state.get("connected") or not state.get("services_ready", False)):
                     continue
-                for key in ("web_port", "wall_port"):
+                for key in ("web_port",):
                     with urllib.request.urlopen(f"http://127.0.0.1:{config[key]+i}/webview.html", timeout=.3) as response:
                         assert response.status == 200
                 pending.remove(i)

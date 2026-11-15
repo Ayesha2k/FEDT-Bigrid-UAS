@@ -86,10 +86,6 @@ def check_ports(ports, host="0.0.0.0"):
 
 
 def select_display(value, x11_root=Path("/tmp/.X11-unix")):
-    # PATCH: Bypass the hardcoded X11 socket probe. 
-    # Docker containers are isolated and cannot access the host's physical display sockets by default.
-    # Returning a dummy display value prevents a RuntimeError and allows --headless mode to boot successfully.
-    return ":0"
     """Honor a working DISPLAY and resolve stale WSL TCP addresses locally."""
     if value:
         try:
@@ -124,8 +120,7 @@ def docker_command():
     subprocess.run(["sudo", "-v"], check=True)
     subprocess.run(["sudo", "docker", "info", "--format", "{{.ServerVersion}}"],
                    check=True, stdout=subprocess.DEVNULL)
-    return ["sudo", "--preserve-env=DISPLAY,CF_HEADLESS,CF_CONTAINER_RUNTIME,MESA_D3D12_DEFAULT_ADAPTER_NAME", "docker"]
-
+    return ["sudo", "--preserve-env=DISPLAY,FEDT_HEADLESS,CF_CONTAINER_RUNTIME,MESA_D3D12_DEFAULT_ADAPTER_NAME", "docker"]
 
 def inspect(docker):
     for _ in range(2):
@@ -155,7 +150,7 @@ def docker_start(args):
     from config import load, ports
     config = load()
     check_ports(ports(config) + [config["webots_port"]])
-    environment = dict(os.environ, CF_HEADLESS="1" if args.headless else "0", DISPLAY=display)
+    environment = dict(os.environ, FEDT_HEADLESS="1" if args.headless else "0", DISPLAY=display)
     runtimes = subprocess.run(docker + ["info", "--format", "{{json .Runtimes}}"], capture_output=True, text=True, check=True)
     if Path("/dev/dxg").exists():
         environment.setdefault("CF_CONTAINER_RUNTIME", "runc")
